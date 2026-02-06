@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Calculator } from './components/Calculator';
 import { ResultTable } from './components/ResultTable';
@@ -252,8 +253,10 @@ const App: React.FC = () => {
     const bcdMethod2 = Math.ceil(currentInputs.insideDia + (2 * currentInputs.g1) + (2 * radialDistance));
 
     const baseBCDForAutoGasket = Math.max(bcdMethod1, bcdMethod2);
-    const autoSeatingOD_BCD = baseBCDForAutoGasket - boltHoleSizeVal - (2 * effectiveC) - (2 * bConst) - (2 * outerRingWidth);
-    const autoSeatingOD_Shell = currentInputs.insideDia + (2 * shellGapA) + (2 * innerRingWidth) + (2 * currentInputs.gasketSeatingWidth);
+    // ROUNDUP Gasket Seating OD (Based on BCD)
+    const autoSeatingOD_BCD = Math.ceil(baseBCDForAutoGasket - boltHoleSizeVal - (2 * effectiveC) - (2 * bConst) - (2 * outerRingWidth));
+    // ROUNDUP Gasket Seating OD (Based on Shell ID)
+    const autoSeatingOD_Shell = Math.ceil(currentInputs.insideDia + (2 * shellGapA) + (2 * innerRingWidth) + (2 * currentInputs.gasketSeatingWidth));
 
     let autoSeatingOD = 0;
     if (currentInputs.gasketPreference === 'shell') {
@@ -272,7 +275,8 @@ const App: React.FC = () => {
     const gasketOD = seatingOD + (currentInputs.hasOuterRing ? (2 * outerRingWidth) : 0);
     const gasketID = seatingID - (currentInputs.hasInnerRing ? (2 * innerRingWidth) : 0);
 
-    const bcdMethod3 = gasketOD + (2 * bConst) + (2 * effectiveC) + boltHoleSizeVal;
+    // Gasket / Clearance Logic: Roundup to units place
+    const bcdMethod3 = Math.ceil(gasketOD + (2 * bConst) + (2 * effectiveC) + boltHoleSizeVal);
     const bcdTema = Math.max(bcdMethod1, bcdMethod2, bcdMethod3);
     const selectedBcdSource = bcdTema === bcdMethod1 ? 1 : (bcdTema === bcdMethod2 ? 2 : 3);
 
@@ -320,6 +324,7 @@ const App: React.FC = () => {
     const totalBoltArea = boltData.tensileArea * currentInputs.boltCount;
     const reqAreaOperating = wm1 / (designAllowableStress || 1);
     const reqAreaSeating = wm2 / (ambientAllowableStress || 1);
+    // Fix: Added 'const' to declare requiredBoltArea
     const requiredBoltArea = Math.max(reqAreaOperating, reqAreaSeating);
 
     const shellMat = plateMaterials.find(m => m.id === currentInputs.shellMaterial) || plateMaterials[0];
@@ -333,7 +338,8 @@ const App: React.FC = () => {
       radialDistance, edgeDistance, effectiveC, shellGapA,
       gasketSeatingWidth: nWidth, innerRingWidth, outerRingWidth,
       gasketID, seatingID, seatingOD, gasketOD, finalBCD, finalOD,
-      maxRaisedFace: finalBCD - boltHoleSizeVal - (2 * effectiveC) - (2 * bConst) - (2 * outerRingWidth), 
+      // ROUNDUP Max Raised Face logic (Seating OD Based on BCD)
+      maxRaisedFace: Math.ceil(finalBCD - boltHoleSizeVal - (2 * effectiveC) - (2 * bConst) - (2 * outerRingWidth)), 
       boltHoleSize: boltHoleSizeVal,
       singleBoltArea: boltData.tensileArea, totalBoltArea,
       requiredBoltArea,
@@ -379,15 +385,14 @@ const App: React.FC = () => {
   const handleOptimize = (targetInputs: FlangeInputs = inputs) => {
     const isManual = targetInputs.useManualOverride;
     
-    // 4가지 모드 판별
-    // 1. 가스켓 고정 모드 판단: (수동 모드에서 치수 입력됨) OR (Gasket OD Preference 버튼 눌림)
+    // Determine Modes
+    // 1. Gasket Fixed Mode: Manual mode with non-zero values OR explicit button clicked
     const isGasketFixed = (isManual && (targetInputs.manualSeatingOD > 0 || targetInputs.manualSeatingID > 0))
                           || targetInputs.gasketPreference !== undefined;
     
-    // 2. 볼트 사이즈 고정 모드 판단: 사용자가 볼트 규격 셀렉트 박스 조작함
+    // 2. Bolt Size Fixed Mode: Tracked via isFixedSizeSearch state
     const isSizeFixed = isFixedSizeSearch;
 
-    // 루프 탐색 준비
     const sizesToSearch = isSizeFixed 
       ? [targetInputs.boltSize] 
       : temaBoltData.filter(b => b.size >= 0.75).map(b => b.size);
@@ -401,10 +406,15 @@ const App: React.FC = () => {
 
     for (const size of sizesToSearch) {
       for (const count of countsToSearch) {
-        // 테스트할 입력 데이터 생성 (actualBCD/OD 오버라이드는 초기화하여 계산된 BCD 확인)
-        const testInputs = { ...targetInputs, boltSize: size, boltCount: count, actualBCD: 0, actualOD: 0 };
+        const testInputs = { 
+          ...targetInputs, 
+          boltSize: size, 
+          boltCount: count, 
+          actualBCD: 0, 
+          actualOD: 0 
+        };
         
-        // 가스켓 고정 모드가 아닐 경우에만 가스켓 치수 자동화 허용
+        // If gasket is NOT fixed, allow auto-calculation to find smallest BCD
         if (!isGasketFixed) {
           testInputs.manualSeatingOD = 0;
           testInputs.manualSeatingID = 0;
@@ -414,9 +424,9 @@ const App: React.FC = () => {
         const testResults = calculateFullResults(testInputs);
         const req = Math.max(testResults.wm1, testResults.wm2);
         
-        // 강도 조건(Safety) 및 물리적 간격 조건(Spacing) 충족 확인
+        // Condition: Strength + Spacing
         if (testResults.totalBoltLoadDesign >= req && testResults.spacingOk) {
-          // BCD 최소화 탐색
+          // Objective: Minimum BCD
           if (testResults.bcdTema < minBCD) {
             minBCD = testResults.bcdTema;
             bestSize = size;
@@ -436,11 +446,11 @@ const App: React.FC = () => {
         actualOD: 0 
       }));
       
-      const modeMsg = isSizeFixed ? `Fixed Size (${bestSize}")` : "Full Optimization";
+      const modeMsg = isSizeFixed ? `Fixed Size (${bestSize}")` : "Full Search";
       const gMsg = isGasketFixed ? "Fixed Gasket" : "Auto Gasket";
-      alert(`Optimization Successful!\nMode: ${modeMsg} + ${gMsg}\nSmallest BCD: ~${Math.ceil(minBCD)} mm\nBolt Count: ${bestCount} EA`);
+      alert(`Optimization Completed!\nMode: ${modeMsg} + ${gMsg}\nMin BCD: ~${Math.ceil(minBCD)} mm\nBolt Count: ${bestCount} EA`);
     } else {
-      alert(`Optimization Failed!\nNo valid configuration found that satisfies safety and spacing constraints under current ${isGasketFixed ? 'Fixed Gasket' : 'Auto Gasket'} mode.`);
+      alert(`Optimization Failed!\nNo configuration found satisfying safety and spacing constraints.`);
     }
   };
 
@@ -722,7 +732,7 @@ const App: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button onClick={handleSaveToList} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-lg text-[10px] font-black uppercase shadow-md flex items-center gap-2 min-w-[100px] justify-center"><i className="fa-solid fa-floppy-disk"></i> SAVE</button>
                 <button onClick={handleEditSave} className={`px-4 py-1.5 rounded-lg text-[10px] font-black uppercase shadow-md flex items-center gap-2 border-2 min-w-[100px] justify-center ${editingRecordId ? 'bg-sky-600 border-sky-400 text-white' : 'bg-slate-100 border-slate-200 text-slate-400'}`}><i className="fa-solid fa-file-pen"></i> EDIT SAVE</button>
-                <button onClick={handleClearRecords} className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white px-4 py-1 rounded text-[9px] font-black uppercase tracking-widest border border-red-500/50"><i className="fa-solid fa-trash-can"></i> ALL CLEAR</button>
+                <button onClick={handleClearRecords} className="bg-red-50/10 hover:bg-red-500 text-red-500 hover:text-white px-4 py-1 rounded text-[9px] font-black uppercase tracking-widest border border-red-500/50"><i className="fa-solid fa-trash-can"></i> ALL CLEAR</button>
                 <button onClick={exportToExcel} className="bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all"><i className="fa-solid fa-file-excel"></i> PRINT</button>
                 <button onClick={handleSaveAll} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-2"><i className="fa-solid fa-floppy-disk"></i> OUTPUT</button>
               </div>
